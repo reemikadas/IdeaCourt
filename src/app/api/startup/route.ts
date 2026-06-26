@@ -25,11 +25,11 @@ function friendlyErrorMessage(message: string) {
     const retryAfter = retryAfterSeconds(message);
     const retryText = retryAfter ? ` Wait about ${retryAfter} seconds and retry.` : "";
 
-    return `Gemini free-tier quota was hit.${retryText} The app is using real API calls, so this happens when multiple agent calls exceed Google's current free-tier request limit.`;
+    return `The active model provider quota was hit.${retryText} The app is using real API calls, so this can happen when multiple agent calls exceed the current provider limit.`;
   }
 
   if (isProviderCapacityError(message)) {
-    return "Gemini is currently overloaded. The app retried and tried the configured real-model fallback, but the provider is still unavailable. Please try again in a few minutes.";
+    return "The active model provider did not return a usable response. The app retried and tried the configured real-model fallback, but the provider is still unavailable. Please try again in a few minutes.";
   }
 
   return message;

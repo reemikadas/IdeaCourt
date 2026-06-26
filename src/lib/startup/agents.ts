@@ -1,6 +1,7 @@
 import { generateText, NoObjectGeneratedError, Output } from "ai";
 import { google } from "@ai-sdk/google";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { z } from "zod";
 
 import {
   BuildSynthesisSchema,
@@ -108,10 +109,56 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function extractJsonObject(text: string) {
+  const withoutFence = text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+  const start = withoutFence.indexOf("{");
+  const end = withoutFence.lastIndexOf("}");
+
+  if (start === -1 || end === -1 || end <= start) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(withoutFence.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+function parseLooseStructuredOutput(schema: Parameters<typeof Output.object>[0]["schema"], text: string) {
+  const parsed = extractJsonObject(text);
+
+  if (!parsed || typeof schema !== "object" || schema === null || !("safeParse" in schema)) {
+    return null;
+  }
+
+  const result = (schema as { safeParse: (value: unknown) => { success: boolean; data?: unknown } }).safeParse(parsed);
+
+  return result.success ? result.data : null;
+}
+
+function schemaPrompt(schema: Parameters<typeof Output.object>[0]["schema"]) {
+  try {
+    if (typeof schema === "object" && schema !== null && "toJSONSchema" in schema) {
+      return JSON.stringify((schema as { toJSONSchema: () => unknown }).toJSONSchema(), null, 2);
+    }
+
+    return JSON.stringify(z.toJSONSchema(schema as z.ZodTypeAny), null, 2);
+  } catch {
+    return "Return the exact fields required by the structured output schema.";
+  }
+}
+
 export function isProviderCapacityError(error: unknown) {
   const message = errorMessage(error).toLowerCase();
 
   return (
+    message.includes("no output generated") ||
+    message.includes("empty response") ||
     message.includes("high demand") ||
     message.includes("try again later") ||
     message.includes("temporarily unavailable") ||
@@ -207,9 +254,41 @@ async function runStructuredAgent<T>({
     const candidates = modelIds();
     let lastCapacityError: unknown;
     let lastQuotaError: unknown;
+    let lastSchemaError: unknown;
 
     for (const candidate of candidates) {
       try {
+        if (process.env.AI_PROVIDER === "gmi") {
+          const gmiPrompt = [
+            structuredPrompt,
+            "Required JSON schema:",
+            schemaPrompt(schema),
+            "Return only one JSON object that validates against this schema.",
+          ].join("\n\n");
+          const result = await generateText({
+            model: model(candidate),
+            maxRetries: 0,
+            system: [
+              system,
+              "Return one valid JSON object only.",
+              "Do not wrap the JSON in markdown fences.",
+              "Do not include commentary before or after the JSON object.",
+            ].join("\n"),
+            prompt: gmiPrompt,
+          });
+          const looseOutput = parseLooseStructuredOutput(schema, result.text);
+
+          if (!looseOutput) {
+            lastSchemaError = new Error(`${candidate} returned text that did not parse as schema-valid JSON.`);
+            continue;
+          }
+
+          return {
+            modelId: candidate,
+            result: { output: looseOutput },
+          };
+        }
+
         return {
           modelId: candidate,
           result: await generateText({
@@ -221,6 +300,20 @@ async function runStructuredAgent<T>({
           }),
         };
       } catch (error) {
+        if (NoObjectGeneratedError.isInstance(error)) {
+          const looseOutput = error.text ? parseLooseStructuredOutput(schema, error.text) : null;
+
+          if (looseOutput) {
+            return {
+              modelId: candidate,
+              result: { output: looseOutput },
+            };
+          }
+
+          lastSchemaError = error;
+          continue;
+        }
+
         if (isProviderQuotaError(error)) {
           lastQuotaError = error;
 
@@ -290,6 +383,10 @@ async function runStructuredAgent<T>({
       throw lastQuotaError;
     }
 
+    if (lastSchemaError) {
+      throw lastSchemaError;
+    }
+
     throw lastCapacityError;
   }
 
@@ -330,7 +427,7 @@ async function runStructuredAgent<T>({
         throw repairError;
       }
     } else {
-      throw error;
+      throw new Error(`${agent} failed while calling the configured real model provider: ${errorMessage(error)}`);
     }
   }
 
