@@ -1,49 +1,52 @@
 # IdeaCourt
 
-A real multi-agent startup validation workbench that puts startup ideas on trial. A founder enters an idea, and the app coordinates a team of agents to produce source-backed research, a hard viability verdict, and only the artifacts that verdict earns.
+IdeaCourt is a startup validation workbench for the moment before founders start building.
 
-This is not a mocked demo. The backend refuses to generate a dossier unless live search and model credentials are configured.
+Most idea tools are too polite. They help turn a rough concept into a polished plan, even when the idea probably needs to be challenged first. IdeaCourt takes the opposite approach: it researches the market, looks for customer pain, compares alternatives, and gives the idea a verdict before generating any product plan.
 
-## Product Rules
+If the evidence is strong, it produces the startup brief: market research, personas, PRD, revenue assumptions, GTM plan, validation steps, and UX outline. If the evidence is weak, it stops there and explains what needs to change.
 
-- Do not use browser local storage, session storage, or IndexedDB for product state.
-- Keep state either in the active React session or in a real backend service when persistence is intentionally added.
-- Every visible control, panel, metric, and feature must be connected to a real workflow, API result, or user decision.
-- Do not add decorative, simulated, placeholder, or "coming soon" features.
-- If a feature cannot work end to end yet, leave it out until its purpose and connection are real.
+## What It Does
 
-## Agent Team
+- Turns a founder's idea into a source-backed validation dossier.
+- Uses live web search instead of static sample data.
+- Runs a multi-agent workflow for market research, customer insight, product, finance, growth, and UX.
+- Adds an evidence gate before product planning, so weak ideas do not get dressed up as strong ones.
+- Supports voice input for pitching an idea instead of typing a long prompt.
+- Keeps generated work in the active session only; no browser local storage is used.
 
-- CEO Agent: coordinates team output into one startup thesis
-- Market Research Agent: uses live web search for competitors, trends, whitespace, and risks
-- Customer Interview Agent: turns public customer pain evidence into personas and interview scripts
-- Evidence Gate Agent: rates Pain Urgency, Willingness To Pay, Market Pull, Competitive Opening, Reachable Customer, and MVP Feasibility
-- Product Manager Agent: creates an MVP PRD
-- Finance Agent: estimates pricing, revenue scenarios, and validation thresholds
-- Growth Agent: creates GTM channels, launch sequence, and experiments
-- UX Agent: produces task-first wireframes and onboarding flow
+## How The Verdict Works
 
-The Product Manager, Finance, Growth, and UX agents only run when the Evidence Gate returns a `Build` verdict.
+IdeaCourt does not always continue to product planning.
 
-## Viability Verdicts
+- `Build`: the idea earns the full dossier, including PRD, finance, GTM, UX, and build order.
+- `Pivot`: the problem may be real, but the current angle needs to change before it is worth building.
+- `Do Not Build Yet`: the evidence is too weak, crowded, low-value, or uncertain to justify a product plan.
 
-- `Build`: generate the full conditional dossier with PRD, finance, GTM, UX, validation plan, and build order.
-- `Pivot`: skip polished build artifacts and return critique, stronger adjacent directions, and validation experiments.
-- `Do Not Build Yet`: skip polished build artifacts and return kill reasons, cheap tests, and what evidence could change the verdict.
+## Tech Stack
 
-## Requirements
+- Next.js 16
+- React 19
+- TypeScript
+- Vercel AI SDK
+- Tavily for live search
+- GMI Cloud / OpenAI-compatible model APIs
 
-- Node.js compatible with Next.js 16
-- `TAVILY_API_KEY` for live web search
-- `GMI_API_KEY` for GMI Cloud serverless Model Hub inference, or another configured model provider key
+## Getting Started
 
-Create `.env.local`:
+Install dependencies:
+
+```bash
+npm install
+```
+
+Create a local environment file:
 
 ```bash
 cp .env.example .env.local
 ```
 
-Then fill in:
+Fill in the keys you want to use:
 
 ```env
 TAVILY_API_KEY=...
@@ -58,29 +61,28 @@ AI_CAPACITY_RETRY_DELAY_MS=5000
 AI_QUOTA_RETRIES=0
 ```
 
-For a final hackathon run with Nemotron, switch to:
+Run the app:
+
+```bash
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000).
+
+## Model Notes
+
+The default setup uses GMI Cloud because it works well with hackathon credits and OpenAI-compatible serverless inference.
+
+For a stronger final run, the model can be switched to Nemotron:
 
 ```env
 AI_MODEL=nvidia/nemotron-3-ultra-550b-a55b
 AI_MODEL_FALLBACKS=zai-org/GLM-5.2-FP8,MiniMaxAI/MiniMax-M3
 ```
 
-`AI_MODEL` is optional. GMI mode defaults to `zai-org/GLM-5.2-FP8`; direct Gemini mode defaults to `gemini-2.5-flash-lite`; AI Gateway mode defaults to `openai/gpt-5.5`.
+Provider limits are real. If a model is out of quota or temporarily overloaded, the app returns a clear error instead of fabricating a result.
 
-Provider quota is real. The app serializes model calls and can optionally wait through provider retry windows when configured, but repeated full runs can still hit free-tier or credit limits.
-
-Provider overload is also real. If the active model returns a temporary high-demand error, the app waits `AI_CAPACITY_RETRY_DELAY_MS`, retries once by default, and then tries the comma-separated `AI_MODEL_FALLBACKS` list. If every real model is unavailable, the API returns `503` instead of fabricating output.
-
-## Run
-
-```bash
-npm install
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000).
-
-## Build And Verify
+## Checks
 
 ```bash
 npm run lint
@@ -90,13 +92,10 @@ npm run build
 
 ## Architecture
 
-- `src/app/page.tsx`: server page shell
+- `src/app/api/startup/route.ts`: API route for dossier generation
 - `src/components/startup-workbench.tsx`: interactive founder workbench
-- `src/app/api/startup/route.ts`: startup dossier API route
-- `src/lib/startup/search.ts`: Tavily live search client
-- `src/lib/startup/schema.ts`: Zod contracts for every agent output
-- `src/lib/startup/agents.ts`: multi-agent orchestration with structured AI SDK outputs and hard gating
+- `src/lib/startup/agents.ts`: agent orchestration and verdict gating
+- `src/lib/startup/search.ts`: Tavily search client
+- `src/lib/startup/schema.ts`: structured output contracts
 
-The route is intentionally strict. Missing keys, invalid ideas, failed search calls, and schema-invalid model outputs return errors instead of fabricated fallback content.
-
-The app currently keeps generated dossiers in active client memory only. It intentionally does not persist work locally in the browser.
+The backend is intentionally strict. Missing keys, failed searches, invalid model output, and provider errors fail closed rather than falling back to fake data.
