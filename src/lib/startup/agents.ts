@@ -69,6 +69,11 @@ function uniqueModelIds(ids: string[]) {
   return [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
 }
 
+function normalizeBaseUrl(url: string) {
+  const trimmed = url.replace(/\/+$/, "");
+  return trimmed.endsWith("/v1") ? trimmed : `${trimmed}/v1`;
+}
+
 function model(modelName = modelId()) {
   if (process.env.AI_PROVIDER === "google") {
     return google(modelName);
@@ -77,8 +82,8 @@ function model(modelName = modelId()) {
   if (process.env.AI_PROVIDER === "gmi") {
     const gmi = createOpenAICompatible({
       name: "gmi",
-      apiKey: process.env.GMI_API_KEY,
-      baseURL: process.env.GMI_BASE_URL || DEFAULT_GMI_BASE_URL,
+      apiKey: process.env.GMI_MAAS_API_KEY || process.env.GMI_API_KEY,
+      baseURL: normalizeBaseUrl(process.env.GMI_MAAS_BASE_URL || process.env.GMI_BASE_URL || DEFAULT_GMI_BASE_URL),
     });
 
     return gmi(modelName);
@@ -102,6 +107,8 @@ function wait(ms: number) {
 async function pauseForFreeTier() {
   if (isGoogleProvider()) {
     await wait(Number(process.env.AI_AGENT_DELAY_MS || GOOGLE_AGENT_DELAY_MS));
+  } else if (process.env.AI_AGENT_DELAY_MS) {
+    await wait(Number(process.env.AI_AGENT_DELAY_MS));
   }
 }
 
@@ -208,7 +215,7 @@ function assertRuntimeCredentials() {
   }
 
   if (process.env.AI_PROVIDER === "gmi") {
-    if (!process.env.GMI_API_KEY) {
+    if (!process.env.GMI_MAAS_API_KEY && !process.env.GMI_API_KEY) {
       throw new Error(
         "Missing GMI_API_KEY. IdeaCourt uses real GMI Cloud model calls and will not run simulated agents.",
       );
@@ -241,6 +248,7 @@ async function runStructuredAgent<T>({
     name: agent.replace(/[^a-zA-Z0-9]/g, "_"),
     description: `Structured output for ${agent}.`,
   });
+  const isEvidenceGate = agent === "Evidence Gate Agent";
   const system = [
     `You are the ${agent} in IdeaCourt, a real startup validation team.`,
     "Return only data that matches the requested structured output schema.",
@@ -248,6 +256,32 @@ async function runStructuredAgent<T>({
     "Only use the supplied source context and mark uncertainty in plain language.",
     "Be concise, operational, and useful to founders making real decisions.",
     "This is a real company workflow, not a demo. Weak ideas must be criticized honestly.",
+    "",
+    ...(isEvidenceGate
+      ? [
+          "Evaluation rules:",
+          "You are a tough but fair evaluator. Your job is to give founders an honest assessment so they do not waste time on the wrong approach.",
+          "Do not sugarcoat problems, but do not look for reasons to kill ideas either. Judge the evidence on its merits.",
+          "If there is real pain and a credible way to reach customers, even if the business model needs work, that is a Pivot.",
+          "If the pain is real and the evidence supports multiple dimensions, that is a Build. You do not need perfection to say Build.",
+          "Do Not Build Yet is for ideas where the pain is not real, the market does not want this, or the evidence is genuinely too thin to act on.",
+          "Think of it this way: Build means go. Pivot means the core idea has something but needs a different angle. Do Not Build Yet means stop and gather more evidence first.",
+          "Do not default to Do Not Build Yet. Most ideas with real customer pain deserve at least a Pivot.",
+          "Grade like an experienced founder who has built companies before, not like a cynical outsider looking for flaws.",
+          "",
+          "Writing style: write reasoning in plain, simple English that anyone can understand. Never use hyphens or dashes at the start of sentences. Use complete sentences. Explain things like you are talking to a friend.",
+        ]
+      : [
+          "Writing style rules:",
+          "Write like you are explaining something to a friend. Keep it simple and clear.",
+          "Use plain everyday English. A high school student should be able to read this and understand it.",
+          "NEVER use hyphens (-), dashes (--), or bullet markers at the start of any sentence or list item. This is critical.",
+          "Write in complete natural sentences. Short and punchy is better than long and wordy.",
+          "Say 'people' not 'users'. Say 'makes money' not 'monetizes'. Say 'competitors' not 'competitive landscape'.",
+          "Avoid words like leverage, synergy, scalable, actionable, robust, utilize, facilitate, or ecosystem.",
+          "Every string in an array must be a full readable sentence. Not a fragment. Not starting with a dash.",
+          "Example of BAD: '- Subscription model with tiered pricing'. Example of GOOD: 'The app would make money through monthly subscriptions with different price tiers.'",
+        ]),
   ].join("\n");
 
   async function attempt(structuredPrompt: string) {
@@ -273,6 +307,7 @@ async function runStructuredAgent<T>({
               "Return one valid JSON object only.",
               "Do not wrap the JSON in markdown fences.",
               "Do not include commentary before or after the JSON object.",
+              "CRITICAL: All text values in the JSON must be written in plain simple English. NEVER start any text with a hyphen (-) or dash. No corporate jargon. Write like you are talking to a friend.",
             ].join("\n"),
             prompt: gmiPrompt,
           });
@@ -514,15 +549,11 @@ export async function buildStartupDossier(idea: string): Promise<StartupDossier>
     ].join("\n\n"),
   });
 
-  const researchContext = JSON.stringify(
-    {
-      idea: cleanIdea,
-      market: market.output,
-      customers: customers.output,
-    },
-    null,
-    2,
-  );
+  const researchContext = JSON.stringify({
+    idea: cleanIdea,
+    market: market.output,
+    customers: customers.output,
+  });
 
   await pauseForFreeTier();
 
@@ -535,10 +566,10 @@ export async function buildStartupDossier(idea: string): Promise<StartupDossier>
       "Rate exactly these six Evidence Gate Dimensions once each: Pain Urgency, Willingness To Pay, Market Pull, Competitive Opening, Reachable Customer, MVP Feasibility.",
       "Each rating must be Strong, Mixed, or Weak with source-backed reasoning, confidence, and an assumption only when you infer beyond direct evidence.",
       "Verdict rules:",
-      "- Build: strong pain, credible payment signal, reachable customer, and clear competitive opening.",
-      "- Pivot: real pain or opportunity exists, but the current angle, customer, model, or wedge is weak.",
-      "- Do Not Build Yet: pain is weak, payment signal is weak, market is too crowded without a wedge, or evidence is too thin.",
-      "Do not reward polish or novelty. Be skeptical like a CEO protecting company time.",
+      "Build: there is real pain, people would pay for a solution, you can reach them, and there is room in the market. It does not need to be perfect across every dimension.",
+      "Pivot: the core pain or opportunity is real, but the current angle, target customer, or business model needs to change. This is the right call when the idea has a kernel of truth but is aimed wrong.",
+      "Do Not Build Yet: the pain is not real, nobody would pay, or the evidence is so thin that you cannot make any call. This is only for ideas where there is genuinely nothing to work with.",
+      "Be honest and direct but fair. Do not default to killing ideas. If there is real pain and real people who want a solution, give it at least a Pivot.",
       researchContext,
     ].join("\n\n"),
   });
@@ -546,16 +577,12 @@ export async function buildStartupDossier(idea: string): Promise<StartupDossier>
   assertCompleteEvidenceGate(evidenceGate.output);
   await pauseForFreeTier();
 
-  const gatedContext = JSON.stringify(
-    {
-      idea: cleanIdea,
-      market: market.output,
-      customers: customers.output,
-      evidenceGate: evidenceGate.output,
-    },
-    null,
-    2,
-  );
+  const gatedContext = JSON.stringify({
+    idea: cleanIdea,
+    market: market.output,
+    customers: customers.output,
+    evidenceGate: evidenceGate.output,
+  });
 
   if (evidenceGate.output.verdict === "Build") {
     await pauseForFreeTier();
@@ -571,8 +598,6 @@ export async function buildStartupDossier(idea: string): Promise<StartupDossier>
       ].join("\n\n"),
     });
 
-    await pauseForFreeTier();
-
     const finance = await runStructuredAgent<Extract<StartupDossier, { verdict: "Build" }>["finance"]>({
       agent: "Finance Agent",
       schema: FinanceSchema,
@@ -584,8 +609,6 @@ export async function buildStartupDossier(idea: string): Promise<StartupDossier>
       ].join("\n\n"),
     });
 
-    await pauseForFreeTier();
-
     const growth = await runStructuredAgent<Extract<StartupDossier, { verdict: "Build" }>["growth"]>({
       agent: "Growth Agent",
       schema: GrowthSchema,
@@ -596,8 +619,6 @@ export async function buildStartupDossier(idea: string): Promise<StartupDossier>
         gatedContext,
       ].join("\n\n"),
     });
-
-    await pauseForFreeTier();
 
     const wireframe = await runStructuredAgent<Extract<StartupDossier, { verdict: "Build" }>["wireframe"]>({
       agent: "UX Agent",
@@ -635,22 +656,18 @@ export async function buildStartupDossier(idea: string): Promise<StartupDossier>
         "Create only the CEO synthesis fields for a Build dossier.",
         "Do not re-create market, customer, evidence gate, PRD, finance, GTM, UX, or audit trail objects.",
         "Preserve the Evidence Gate reasoning in the thesis and validation plan.",
-        JSON.stringify(
-          {
-            idea: cleanIdea,
-            verdict: "Build",
-            market: market.output,
-            customers: customers.output,
-            evidenceGate: evidenceGate.output,
-            prd: prd.output,
-            finance: finance.output,
-            growth: growth.output,
-            wireframe: wireframe.output,
-            auditTrail,
-          },
-          null,
-          2,
-        ),
+        JSON.stringify({
+          idea: cleanIdea,
+          verdict: "Build",
+          evidenceGate: evidenceGate.output,
+          prdOneLiner: prd.output.oneLiner,
+          prdProblem: prd.output.problemStatement,
+          revenueModel: finance.output.revenueModel,
+          scenarios: finance.output.scenarios,
+          positioning: growth.output.positioning,
+          icp: growth.output.icp,
+          screenCount: wireframe.output.screens.length,
+        }),
       ].join("\n\n"),
     });
 

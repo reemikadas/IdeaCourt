@@ -9,21 +9,26 @@ import {
   CircleDollarSign,
   ClipboardList,
   Compass,
+  Download,
   ExternalLink,
   FileText,
   GitBranch,
+  History,
   Loader2,
   Mic,
   MicOff,
   Play,
+  Save,
   Search,
   ShieldCheck,
   Sparkles,
+  Trash2,
   Users,
   Wand2,
   XCircle,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { jsPDF } from "jspdf";
 
 import type { StartupDossier } from "@/lib/startup/schema";
 
@@ -76,6 +81,253 @@ type SpeechRecognitionLike = {
 
 type SpeechRecognitionConstructorLike = new () => SpeechRecognitionLike;
 
+type SavedDossier = {
+  id: string;
+  name: string;
+  verdict: string;
+  idea: string;
+  savedAt: string;
+  dossier: StartupDossier;
+};
+
+const STORAGE_KEY = "ideacourt_saved";
+
+function loadSaved(): SavedDossier[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as SavedDossier[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeSaved(items: SavedDossier[]) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+}
+
+function downloadPdf(dossier: StartupDossier) {
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const margin = 18;
+  const contentWidth = pageWidth - margin * 2;
+  let y = 20;
+
+  function checkPage(needed: number) {
+    if (y + needed > doc.internal.pageSize.getHeight() - 15) {
+      doc.addPage();
+      y = 20;
+    }
+  }
+
+  function heading(text: string) {
+    checkPage(14);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(16);
+    doc.setTextColor(47, 111, 98);
+    doc.text(text, margin, y);
+    y += 9;
+  }
+
+  function subheading(text: string) {
+    checkPage(12);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(21, 21, 21);
+    doc.text(text, margin, y);
+    y += 7;
+  }
+
+  function body(text: string) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    doc.setTextColor(75, 72, 65);
+    const lines = doc.splitTextToSize(text, contentWidth);
+    checkPage(lines.length * 5);
+    doc.text(lines, margin, y);
+    y += lines.length * 5 + 3;
+  }
+
+  function listItems(items: string[]) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    doc.setTextColor(75, 72, 65);
+    for (const item of items) {
+      const lines = doc.splitTextToSize(item, contentWidth - 6);
+      checkPage(lines.length * 5 + 2);
+      doc.text("\u2022", margin, y);
+      doc.text(lines, margin + 6, y);
+      y += lines.length * 5 + 2;
+    }
+    y += 2;
+  }
+
+  function spacer(h = 6) { y += h; }
+
+  // Title
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(22);
+  doc.setTextColor(21, 21, 21);
+  doc.text(dossier.startupName, margin, y);
+  y += 10;
+
+  // Verdict badge
+  doc.setFontSize(12);
+  doc.setTextColor(47, 111, 98);
+  doc.text(`Verdict: ${dossier.verdict}`, margin, y);
+  y += 8;
+
+  // Thesis
+  body(dossier.thesis);
+  spacer();
+
+  // Executive Summary
+  heading("Executive Summary");
+  body(dossier.executiveSummary);
+  spacer();
+
+  // Two-minute pitch or critique
+  if (dossier.verdict === "Build") {
+    heading("Two-Minute Pitch");
+    body(dossier.twoMinutePitch);
+    spacer();
+  } else {
+    heading("Critique");
+    body(dossier.critiqueSummary);
+    spacer();
+  }
+
+  // Evidence Gate
+  heading("Evidence Gate");
+  body(dossier.evidenceGate.verdictReasoning);
+  spacer(3);
+  for (const dim of dossier.evidenceGate.dimensions) {
+    subheading(`${dim.dimension} — ${dim.rating} (${dim.confidence})`);
+    body(dim.reasoning);
+    if (dim.assumption) {
+      doc.setFont("helvetica", "italic");
+      body(`Assumption: ${dim.assumption}`);
+    }
+  }
+  spacer();
+
+  // Market Research
+  heading("Market Research");
+  body(dossier.market.marketProblem);
+  spacer(3);
+  subheading("Competitors");
+  for (const c of dossier.market.competitors) {
+    checkPage(12);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(21, 21, 21);
+    doc.text(c.name, margin, y);
+    y += 5;
+    body(c.positioning);
+  }
+  if (dossier.market.risks.length > 0) {
+    subheading("Risks");
+    listItems(dossier.market.risks);
+  }
+  spacer();
+
+  // Customer Evidence
+  heading("Customer Evidence");
+  for (const p of dossier.customers.personas) {
+    subheading(`${p.name} — ${p.segment}`);
+    if (p.pains.length > 0) {
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.text("Pain points:", margin, y);
+      y += 5;
+      listItems(p.pains);
+    }
+  }
+  spacer();
+
+  // Build-specific sections
+  if (dossier.verdict === "Build") {
+    heading("Product PRD");
+    body(dossier.prd.oneLiner);
+    spacer(3);
+    subheading("Problem");
+    body(dossier.prd.problemStatement);
+    subheading("MVP Features");
+    for (const f of dossier.prd.mvpFeatures) {
+      checkPage(10);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.text(`${f.priority} — ${f.name}`, margin, y);
+      y += 5;
+      body(f.userValue);
+    }
+    spacer();
+
+    heading("Finance");
+    body(dossier.finance.revenueModel);
+    spacer(3);
+    for (const s of dossier.finance.scenarios) {
+      subheading(`${s.name.charAt(0).toUpperCase() + s.name.slice(1)} Scenario`);
+      body(`$${s.revenueYearOne.toLocaleString()} year one revenue, ${s.customersYearOne} customers, $${s.arpaMonthly} monthly ARPA`);
+    }
+    spacer();
+
+    heading("GTM Strategy");
+    body(dossier.growth.positioning);
+    if (dossier.growth.channels.length > 0) {
+      subheading("Channels");
+      listItems(dossier.growth.channels);
+    }
+    spacer();
+
+    heading("Build Order");
+    listItems(dossier.buildOrder);
+    spacer();
+
+    heading("Validation Plan");
+    listItems(dossier.validationPlan);
+  }
+
+  // Pivot-specific
+  if (dossier.verdict === "Pivot") {
+    heading("Pivot Options");
+    for (const opt of dossier.pivotOptions) {
+      subheading(opt.name);
+      body(`Target: ${opt.targetCustomer}`);
+      body(opt.whyBetter);
+    }
+    spacer();
+    heading("Risks to Resolve");
+    listItems(dossier.risksToResolve);
+  }
+
+  // Do Not Build Yet specific
+  if (dossier.verdict === "Do Not Build Yet") {
+    heading("Kill Reasons");
+    listItems(dossier.killReasons);
+    spacer();
+    heading("Cheap Tests");
+    for (const t of dossier.cheapTests) {
+      subheading(t.name);
+      body(t.objective);
+      body(`Method: ${t.method}`);
+      body(`Success signal: ${t.successSignal}`);
+    }
+    spacer();
+    heading("What Would Change the Verdict");
+    listItems(dossier.whatWouldChangeVerdict);
+  }
+
+  // Footer
+  spacer(8);
+  checkPage(10);
+  doc.setFont("helvetica", "italic");
+  doc.setFontSize(8);
+  doc.setTextColor(150, 150, 150);
+  doc.text(`Generated by IdeaCourt on ${new Date().toLocaleDateString()}`, margin, y);
+
+  doc.save(`${dossier.startupName.replace(/[^a-zA-Z0-9]/g, "-")}-IdeaCourt.pdf`);
+}
+
 declare global {
   interface Window {
     SpeechRecognition?: SpeechRecognitionConstructorLike;
@@ -119,8 +371,44 @@ export function StartupWorkbench() {
   const [isRunning, setIsRunning] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState("");
+  const [savedDossiers, setSavedDossiers] = useState<SavedDossier[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [currentIdea, setCurrentIdea] = useState("");
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const voiceBaseTextRef = useRef("");
+
+  useEffect(() => {
+    setSavedDossiers(loadSaved());
+  }, []);
+
+  const saveDossier = useCallback(() => {
+    if (!dossier) return;
+    const entry: SavedDossier = {
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      name: dossier.startupName,
+      verdict: dossier.verdict,
+      idea: currentIdea,
+      savedAt: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+      dossier,
+    };
+    const updated = [entry, ...savedDossiers];
+    writeSaved(updated);
+    setSavedDossiers(updated);
+  }, [dossier, currentIdea, savedDossiers]);
+
+  const deleteDossier = useCallback((id: string) => {
+    const updated = savedDossiers.filter((d) => d.id !== id);
+    writeSaved(updated);
+    setSavedDossiers(updated);
+  }, [savedDossiers]);
+
+  const loadDossier = useCallback((saved: SavedDossier) => {
+    setDossier(saved.dossier);
+    setIdea(saved.idea);
+    setCurrentIdea(saved.idea);
+    setError("");
+    setShowHistory(false);
+  }, []);
 
   useEffect(() => {
     if (retryAfterSeconds <= 0) {
@@ -211,7 +499,9 @@ export function StartupWorkbench() {
     setRetryAfterSeconds(0);
     stopVoiceInput();
     setDossier(null);
+    setCurrentIdea(idea);
     setIsRunning(true);
+    setShowHistory(false);
 
     try {
       const response = await fetch("/api/startup", {
@@ -321,8 +611,70 @@ export function StartupWorkbench() {
                   ) : null}
                 </div>
               ) : null}
+              <div className="mt-4 flex gap-2">
+                <button
+                  type="button"
+                  onClick={saveDossier}
+                  disabled={!dossier}
+                  className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-md border border-black/15 bg-white text-sm font-semibold text-[#35332e] transition hover:border-[#2f6f62] hover:text-[#2f6f62] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Save size={15} aria-hidden="true" />
+                  Save
+                </button>
+                <button
+                  type="button"
+                  onClick={() => dossier && downloadPdf(dossier)}
+                  disabled={!dossier}
+                  className="inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-md border border-black/15 bg-white text-sm font-semibold text-[#35332e] transition hover:border-[#2f6f62] hover:text-[#2f6f62] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Download size={15} aria-hidden="true" />
+                  PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowHistory(!showHistory)}
+                  className={`inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-md border text-sm font-semibold transition ${showHistory ? "border-[#2f6f62] bg-[#eef5f2] text-[#2f6f62]" : "border-black/15 bg-white text-[#35332e] hover:border-[#2f6f62] hover:text-[#2f6f62]"}`}
+                >
+                  <History size={15} aria-hidden="true" />
+                  History ({savedDossiers.length})
+                </button>
+              </div>
             </div>
 
+            {showHistory ? (
+              <div className="space-y-2">
+                {savedDossiers.length === 0 ? (
+                  <p className="py-4 text-center text-sm text-[#69665e]">No saved results yet.</p>
+                ) : (
+                  savedDossiers.map((saved) => (
+                    <div
+                      key={saved.id}
+                      className="group flex items-center gap-3 rounded-md border border-black/10 bg-[#f9f7f0] p-3 transition hover:border-[#2f6f62]/30"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => loadDossier(saved)}
+                        className="min-w-0 flex-1 text-left"
+                      >
+                        <p className="truncate text-sm font-semibold">{saved.name}</p>
+                        <div className="mt-1 flex items-center gap-2">
+                          <VerdictBadge verdict={saved.verdict as StartupDossier["verdict"]} />
+                          <span className="text-xs text-[#69665e]">{saved.savedAt}</span>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => deleteDossier(saved.id)}
+                        className="flex size-8 shrink-0 items-center justify-center rounded-md text-[#69665e] opacity-0 transition hover:bg-[#fff0ed] hover:text-[#7b2d20] group-hover:opacity-100"
+                        title="Delete"
+                      >
+                        <Trash2 size={15} aria-hidden="true" />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            ) : (
             <div className="space-y-3">
               {pipeline.map((agent) => {
                 const Icon = agent.icon;
@@ -342,6 +694,7 @@ export function StartupWorkbench() {
                 );
               })}
             </div>
+            )}
           </aside>
 
           <section className="min-w-0">

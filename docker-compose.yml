@@ -1,0 +1,17 @@
+services:
+  ideacourt:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - AI_PROVIDER=gmi
+      - GMI_API_KEY=${GMI_API_KEY}
+      - GMI_BASE_URL=https://api.gmi-serving.com/v1
+      - AI_MODEL=nvidia/nemotron-3-ultra-550b-a55b
+      - AI_MODEL_FALLBACKS=zai-org/GLM-5.2-FP8,MiniMaxAI/MiniMax-M3
+      - AI_AGENT_DELAY_MS=1000
+      - AI_CAPACITY_RETRIES=1
+      - AI_CAPACITY_RETRY_DELAY_MS=5000
+      - AI_QUOTA_RETRIES=0
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+    restart: unless-stopped

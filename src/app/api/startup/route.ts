@@ -35,10 +35,32 @@ function friendlyErrorMessage(message: string) {
   return message;
 }
 
+const NOT_A_STARTUP_PATTERNS = [
+  /^(what|who|how|when|where|why|which|can you|do you|are you|is it|tell me|explain)\b/i,
+  /\b(your hobby|your name|who are you|how are you|what do you do|favorite|joke|weather|hello|hi there|hey)\b/i,
+];
+
+function looksLikeStartupPitch(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length < 20) return false;
+  for (const pattern of NOT_A_STARTUP_PATTERNS) {
+    if (pattern.test(trimmed)) return false;
+  }
+  return true;
+}
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as { idea?: unknown };
     const idea = typeof body.idea === "string" ? body.idea : "";
+
+    if (!looksLikeStartupPitch(idea)) {
+      return Response.json(
+        { error: "I only evaluate startup ideas. Describe a product or business you want to build and I'll put it through the evidence gate." },
+        { status: 400 },
+      );
+    }
+
     const dossier = await buildStartupDossier(idea);
 
     return Response.json({ dossier });

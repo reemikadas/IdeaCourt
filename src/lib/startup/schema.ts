@@ -10,6 +10,10 @@ function firstString(...values: unknown[]) {
   return values.find((value): value is string => typeof value === "string" && value.trim().length > 0);
 }
 
+function cleanBullets(text: string) {
+  return text.replace(/^[\s]*[-–—•*]\s*/gm, "").trim();
+}
+
 function evidenceText(value: unknown, keys: string[]) {
   const record = asRecord(value);
 
@@ -49,8 +53,16 @@ function normalizedConfidence(value: unknown) {
   return value;
 }
 
+const CleanStringSchema = z.preprocess(
+  (value) => typeof value === "string" ? cleanBullets(value) : value,
+  z.string(),
+);
+
 const LooseStringSchema = z.preprocess(
-  (value) => evidenceText(value, ["point", "note", "evidence", "question", "trigger", "alternative", "text"]),
+  (value) => {
+    const text = evidenceText(value, ["point", "note", "evidence", "question", "trigger", "alternative", "text"]);
+    return typeof text === "string" ? cleanBullets(text) : text;
+  },
   z.string(),
 );
 
@@ -197,8 +209,8 @@ export const EvidenceGateSchema = z.object({
   verdict: ViabilityVerdictSchema,
   verdictReasoning: z.string(),
   dimensions: z.array(EvidenceDimensionEvaluationSchema).length(6),
-  strongestEvidence: z.array(z.preprocess((value) => evidenceText(value, ["point", "evidence"]), z.string())),
-  biggestRisks: z.array(z.preprocess((value) => evidenceText(value, ["risk", "concern"]), z.string())),
+  strongestEvidence: z.array(z.preprocess((value) => { const t = evidenceText(value, ["point", "evidence"]); return typeof t === "string" ? cleanBullets(t) : t; }, z.string())),
+  biggestRisks: z.array(z.preprocess((value) => { const t = evidenceText(value, ["risk", "concern"]); return typeof t === "string" ? cleanBullets(t) : t; }, z.string())),
   buildThreshold: z.string(),
 });
 
@@ -278,8 +290,8 @@ export const MarketResearchSchema = z.preprocess((value) => {
       evidenceUrl: z.string().nullable(),
     })),
   ),
-  whitespace: z.array(z.preprocess((value) => evidenceText(value, ["opportunity", "whitespace"]), z.string())),
-  risks: z.array(z.preprocess((value) => evidenceText(value, ["risk", "concern"]), z.string())),
+  whitespace: z.array(z.preprocess((value) => { const t = evidenceText(value, ["opportunity", "whitespace"]); return typeof t === "string" ? cleanBullets(t) : t; }, z.string())),
+  risks: z.array(z.preprocess((value) => { const t = evidenceText(value, ["risk", "concern"]); return typeof t === "string" ? cleanBullets(t) : t; }, z.string())),
   sources: z.array(SourceSchema),
 }));
 
@@ -312,16 +324,16 @@ export const PrdSchema = z.object({
       priority: z.enum(["P0", "P1", "P2"]),
     }),
   ),
-  userStories: z.array(z.string()),
-  successMetrics: z.array(z.string()),
-  nonGoals: z.array(z.string()),
-  openQuestions: z.array(z.string()),
+  userStories: z.array(CleanStringSchema),
+  successMetrics: z.array(CleanStringSchema),
+  nonGoals: z.array(CleanStringSchema),
+  openQuestions: z.array(CleanStringSchema),
 });
 
 export const FinanceSchema = z.object({
   revenueModel: z.string(),
-  pricing: z.array(z.string()),
-  assumptions: z.array(z.string()),
+  pricing: z.array(CleanStringSchema),
+  assumptions: z.array(CleanStringSchema),
   scenarios: z.array(
     z.object({
       name: z.enum(["conservative", "base", "aggressive"]),
@@ -332,28 +344,28 @@ export const FinanceSchema = z.object({
       notes: z.string(),
     }),
   ),
-  unitEconomics: z.array(z.string()),
-  validationThresholds: z.array(z.string()),
+  unitEconomics: z.array(CleanStringSchema),
+  validationThresholds: z.array(CleanStringSchema),
 });
 
 export const GrowthSchema = z.object({
   icp: z.string(),
   positioning: z.string(),
-  channels: z.array(z.string()),
+  channels: z.array(CleanStringSchema),
   launchSequence: z.array(
     z.object({
       week: z.string(),
       objective: z.string(),
-      actions: z.array(z.string()),
+      actions: z.array(CleanStringSchema),
     }),
   ),
-  experiments: z.array(z.string()),
-  partnerships: z.array(z.string()),
-  riskControls: z.array(z.string()),
+  experiments: z.array(CleanStringSchema),
+  partnerships: z.array(CleanStringSchema),
+  riskControls: z.array(CleanStringSchema),
 });
 
 export const WireframeSchema = z.object({
-  designPrinciples: z.array(z.string()),
+  designPrinciples: z.array(CleanStringSchema),
   screens: z.array(
     z.object({
       name: z.string(),
@@ -369,7 +381,7 @@ export const WireframeSchema = z.object({
       ),
     }),
   ),
-  onboardingFlow: z.array(z.string()),
+  onboardingFlow: z.array(CleanStringSchema),
 });
 
 export const PivotOptionSchema = z.object({
@@ -377,7 +389,7 @@ export const PivotOptionSchema = z.object({
   targetCustomer: z.string(),
   whyBetter: z.string(),
   evidenceBasis: z.string(),
-  validationSteps: z.array(z.string()),
+  validationSteps: z.array(CleanStringSchema),
 });
 
 export const ValidationExperimentSchema = z.object({
@@ -401,9 +413,9 @@ export const BuildSynthesisSchema = z.object({
   startupName: z.string(),
   thesis: z.string(),
   executiveSummary: z.string(),
-  buildOrder: z.array(z.string()),
+  buildOrder: z.array(CleanStringSchema),
   twoMinutePitch: z.string(),
-  validationPlan: z.array(z.string()),
+  validationPlan: z.array(CleanStringSchema),
 });
 
 export const PivotSynthesisSchema = z.object({
@@ -413,7 +425,7 @@ export const PivotSynthesisSchema = z.object({
   critiqueSummary: z.string(),
   pivotOptions: z.array(PivotOptionSchema),
   validationExperiments: z.array(ValidationExperimentSchema),
-  risksToResolve: z.array(z.string()),
+  risksToResolve: z.array(CleanStringSchema),
 });
 
 export const DoNotBuildYetSynthesisSchema = z.object({
@@ -421,17 +433,17 @@ export const DoNotBuildYetSynthesisSchema = z.object({
   thesis: z.string(),
   executiveSummary: z.string(),
   critiqueSummary: z.string(),
-  killReasons: z.array(z.string()),
+  killReasons: z.array(CleanStringSchema),
   cheapTests: z.array(ValidationExperimentSchema),
-  whatWouldChangeVerdict: z.array(z.string()),
+  whatWouldChangeVerdict: z.array(CleanStringSchema),
 });
 
 export const BuildDossierSchema = z.object({
   verdict: z.literal("Build"),
   ...SharedDossierFields,
-  buildOrder: z.array(z.string()),
+  buildOrder: z.array(CleanStringSchema),
   twoMinutePitch: z.string(),
-  validationPlan: z.array(z.string()),
+  validationPlan: z.array(CleanStringSchema),
   prd: PrdSchema,
   finance: FinanceSchema,
   growth: GrowthSchema,
@@ -444,16 +456,16 @@ export const PivotDossierSchema = z.object({
   critiqueSummary: z.string(),
   pivotOptions: z.array(PivotOptionSchema),
   validationExperiments: z.array(ValidationExperimentSchema),
-  risksToResolve: z.array(z.string()),
+  risksToResolve: z.array(CleanStringSchema),
 });
 
 export const DoNotBuildYetDossierSchema = z.object({
   verdict: z.literal("Do Not Build Yet"),
   ...SharedDossierFields,
   critiqueSummary: z.string(),
-  killReasons: z.array(z.string()),
+  killReasons: z.array(CleanStringSchema),
   cheapTests: z.array(ValidationExperimentSchema),
-  whatWouldChangeVerdict: z.array(z.string()),
+  whatWouldChangeVerdict: z.array(CleanStringSchema),
 });
 
 export const StartupDossierSchema = z.discriminatedUnion("verdict", [
